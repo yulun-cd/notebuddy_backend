@@ -4,3 +4,5 @@
 coverage_html
 venv
 .env
+*.db
+.DS_Store
