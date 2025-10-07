@@ -1,9 +1,9 @@
+from typing import List
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine
 from databases import Database
 import os
-import json
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
@@ -191,7 +191,7 @@ async def read_transcripts(
     return transcripts
 
 
-@app.get("/transcripts/{transcript_id}", response_model=schemas.Transcript)
+@app.get("/transcripts/{transcript_id}", response_model=schemas.TranscriptWithNote)
 async def read_transcript(
     transcript_id: int,
     current_user: models.User = Depends(get_current_active_user),
@@ -200,7 +200,15 @@ async def read_transcript(
     transcript = await crud.get_transcript(db, transcript_id, current_user.id)
     if transcript is None:
         raise HTTPException(status_code=404, detail="Transcript not found")
-    return transcript
+
+    # Get the related note if it exists
+    note = await crud.get_note_by_transcript(db, transcript_id, current_user.id)
+
+    # Create response with note_id
+    response_data = dict(transcript)
+    response_data["note_id"] = note["id"] if note else None
+
+    return response_data
 
 
 @app.put("/transcripts/{transcript_id}", response_model=schemas.Transcript)
@@ -235,7 +243,7 @@ async def delete_transcript(
 # AI-powered note generation endpoints
 @app.post(
     "/transcripts/{transcript_id}/generate-note",
-    response_model=schemas.NoteGenerationResponse,
+    response_model=schemas.Note,
 )
 async def generate_note_from_transcript(
     transcript_id: int,
@@ -299,14 +307,12 @@ async def generate_note_from_transcript(
 
     note = await crud.create_note(db, note_data, current_user.id)
 
-    return schemas.NoteGenerationResponse(
-        note=note, message="Note generated successfully"
-    )
+    return schemas.Note(note=note)
 
 
 @app.post(
     "/notes/{note_id}/generate-questions",
-    response_model=schemas.FollowUpQuestionsResponse,
+    response_model=List[str],
 )
 async def generate_follow_up_questions(
     note_id: int,
@@ -345,14 +351,10 @@ async def generate_follow_up_questions(
             detail=detail,
         )
 
-    return schemas.FollowUpQuestionsResponse(
-        questions=questions, message="Follow-up questions generated successfully"
-    )
+    return questions
 
 
-@app.post(
-    "/notes/{note_id}/update-with-answer", response_model=schemas.NoteUpdateResponse
-)
+@app.post("/notes/{note_id}/update-with-answer", response_model=schemas.Note)
 async def update_note_with_answer(
     note_id: int,
     answer_data: schemas.AnswerSubmission,
@@ -405,9 +407,7 @@ async def update_note_with_answer(
         db, note_id, updated_title, updated_content, current_user.id
     )
 
-    return schemas.NoteUpdateResponse(
-        note=updated_note, message="Note updated successfully with answer"
-    )
+    return schemas.Note(note=updated_note)
 
 
 # Note endpoints

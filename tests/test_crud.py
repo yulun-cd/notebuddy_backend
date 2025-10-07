@@ -176,6 +176,63 @@ class TestTranscriptCRUD:
         )
         assert deleted_transcript is None
 
+    async def test_delete_transcript_with_note_cascade(
+        self, database, test_user, test_transcript
+    ):
+        """Test that deleting a transcript also deletes its related note"""
+        # Create a note for the transcript
+        note_data = schemas.NoteCreate(
+            title="Test Note for Cascade",
+            content="This note should be deleted with the transcript.",
+            transcript_id=test_transcript["id"],
+        )
+        note = await crud.create_note(database, note_data, test_user["id"])
+
+        # Verify note exists
+        retrieved_note = await crud.get_note(database, note["id"], test_user["id"])
+        assert retrieved_note is not None
+
+        # Delete the transcript
+        deleted_transcript = await crud.delete_transcript(
+            database, test_transcript["id"], test_user["id"]
+        )
+        assert deleted_transcript is not None
+
+        # Verify transcript is gone
+        retrieved_transcript = await crud.get_transcript(
+            database, test_transcript["id"], test_user["id"]
+        )
+        assert retrieved_transcript is None
+
+        # Verify note is also gone (cascade deletion)
+        retrieved_note_after = await crud.get_note(
+            database, note["id"], test_user["id"]
+        )
+        assert retrieved_note_after is None
+
+    async def test_delete_transcript_without_note(self, database, test_user):
+        """Test that deleting a transcript without a note works correctly"""
+        # Create a transcript without a note
+        transcript_data = schemas.TranscriptCreate(
+            title="Transcript Without Note",
+            content="This transcript has no related note.",
+        )
+        transcript = await crud.create_transcript(
+            database, transcript_data, test_user["id"]
+        )
+
+        # Delete the transcript
+        deleted_transcript = await crud.delete_transcript(
+            database, transcript["id"], test_user["id"]
+        )
+        assert deleted_transcript is not None
+
+        # Verify transcript is gone
+        retrieved_transcript = await crud.get_transcript(
+            database, transcript["id"], test_user["id"]
+        )
+        assert retrieved_transcript is None
+
 
 class TestNoteCRUD:
     """Test note CRUD operations"""

@@ -66,6 +66,17 @@ class Transcript(TranscriptBase):
         from_attributes = True
 
 
+class TranscriptWithNote(TranscriptBase):
+    id: int = Field(read_only=True)
+    user_id: int = Field(read_only=True)
+    created_at: datetime = Field(read_only=True)
+    updated_at: Optional[datetime] = Field(read_only=True, default=None)
+    note_id: Optional[int] = Field(read_only=True, default=None)
+
+    class Config:
+        from_attributes = True
+
+
 # Note schemas
 class NoteBase(BaseModel):
     title: str
@@ -109,19 +120,3 @@ class AnswerSubmission(BaseModel):
 class NoteUpdateRequest(BaseModel):
     note_id: int
     answers: Dict[str, str]
-
-
-# Response schemas
-class NoteGenerationResponse(BaseModel):
-    note: Note
-    message: str
-
-
-class FollowUpQuestionsResponse(BaseModel):
-    questions: List[str]
-    message: str
-
-
-class NoteUpdateResponse(BaseModel):
-    note: Note
-    message: str

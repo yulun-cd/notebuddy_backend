@@ -1,8 +1,7 @@
 from databases import Database
-from typing import List, Optional
+from typing import Optional
 from . import models, schemas
 from .auth import get_password_hash
-import json
 
 
 # User CRUD operations
@@ -55,9 +54,15 @@ async def get_transcript(db: Database, transcript_id: int, user_id: int):
 async def get_user_transcripts(
     db: Database, user_id: int, skip: int = 0, limit: int = 100
 ):
+    # Order by the greater value of created_at and updated_at
+    # Use COALESCE to handle NULL updated_at values (treat them as created_at)
     query = (
         models.Transcript.__table__.select()
         .where(models.Transcript.user_id == user_id)
+        .order_by(
+            models.Transcript.__table__.c.updated_at.desc().nulls_last(),
+            models.Transcript.__table__.c.created_at.desc(),
+        )
         .offset(skip)
         .limit(limit)
     )
@@ -87,6 +92,12 @@ async def update_transcript(
 async def delete_transcript(db: Database, transcript_id: int, user_id: int):
     transcript = await get_transcript(db, transcript_id, user_id)
     if transcript:
+        # First, delete the related note if it exists
+        related_note = await get_note_by_transcript(db, transcript_id, user_id)
+        if related_note:
+            await delete_note(db, related_note["id"], user_id)
+
+        # Then delete the transcript
         query = models.Transcript.__table__.delete().where(
             models.Transcript.id == transcript_id, models.Transcript.user_id == user_id
         )

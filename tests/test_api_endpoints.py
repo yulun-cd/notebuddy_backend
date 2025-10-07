@@ -230,6 +230,38 @@ class TestTranscriptEndpoints:
         get_response = authenticated_client.get(f"/transcripts/{transcript['id']}")
         assert get_response.status_code == 404
 
+    async def test_delete_transcript_cascade_note_deletion(
+        self, authenticated_client, database, test_user, test_transcript
+    ):
+        """Test that deleting a transcript also deletes its related note via API"""
+        # Create a note for the transcript
+        note_data = schemas.NoteCreate(
+            title="Test Note for Cascade",
+            content="This note should be deleted with the transcript.",
+            transcript_id=test_transcript["id"],
+        )
+        note = await crud.create_note(database, note_data, test_user["id"])
+
+        # Verify note exists via API
+        note_response = authenticated_client.get(f"/notes/{note['id']}")
+        assert note_response.status_code == 200
+
+        # Delete the transcript via API
+        delete_response = authenticated_client.delete(
+            f"/transcripts/{test_transcript['id']}"
+        )
+        assert delete_response.status_code == 200
+
+        # Verify transcript is gone
+        transcript_response = authenticated_client.get(
+            f"/transcripts/{test_transcript['id']}"
+        )
+        assert transcript_response.status_code == 404
+
+        # Verify note is also gone (cascade deletion)
+        note_response_after = authenticated_client.get(f"/notes/{note['id']}")
+        assert note_response_after.status_code == 404
+
 
 class TestNoteEndpoints:
     """Test note endpoints"""
