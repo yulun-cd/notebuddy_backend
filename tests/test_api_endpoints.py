@@ -278,10 +278,10 @@ class TestNoteEndpoints:
         client.headers.update({"Authorization": f"Bearer {token}"})
         return client
 
-    async def test_create_note_success(
+    async def test_create_note_endpoint_removed(
         self, authenticated_client, database, test_user, test_transcript
     ):
-        """Test successful note creation"""
+        """Test that manual note creation endpoint is removed"""
         note_data = {
             "title": "Test Note",
             "content": "This is a test note content.",
@@ -290,30 +290,8 @@ class TestNoteEndpoints:
 
         response = authenticated_client.post("/notes/", json=note_data)
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["title"] == note_data["title"]
-        assert data["content"] == note_data["content"]
-        assert data["transcript_id"] == test_transcript["id"]
-        assert data["user_id"] == test_user["id"]
-        assert "id" in data
-        assert "created_at" in data
-        assert data["updated_at"] is None  # Should be None on creation
-
-    async def test_create_note_invalid_transcript(
-        self, authenticated_client, database, test_user
-    ):
-        """Test note creation with invalid transcript ID"""
-        note_data = {
-            "title": "Test Note",
-            "content": "This is a test note content.",
-            "transcript_id": 99999,  # Non-existent transcript
-        }
-
-        response = authenticated_client.post("/notes/", json=note_data)
-
-        # Should succeed since transcript validation happens at business logic level
-        assert response.status_code == 200
+        # Should return 405 Method Not Allowed or 404 Not Found
+        assert response.status_code in [404, 405]
 
     async def test_get_note_success(self, authenticated_client, database, test_note):
         """Test successful note retrieval"""
@@ -401,9 +379,10 @@ class TestAIEndpoints:
         self, mock_generate, authenticated_client, database, test_transcript
     ):
         """Test successful note generation"""
-        # Mock the AI service response
+        # Mock the AI service response - returns tuple (title, content)
         mock_generate.return_value = (
-            "### 测试生成的笔记\n\n#### 核心观点\n这是一个测试生成的笔记内容。"
+            "### 测试生成的笔记",
+            "### 测试生成的笔记\n\n#### 核心观点\n这是一个测试生成的笔记内容。",
         )
 
         response = authenticated_client.post(
@@ -412,9 +391,13 @@ class TestAIEndpoints:
 
         assert response.status_code == 200
         data = response.json()
-        assert "note" in data
-        assert "message" in data
-        assert data["message"] == "Note generated successfully"
+        assert data["title"] == "### 测试生成的笔记"
+        assert (
+            data["content"]
+            == "### 测试生成的笔记\n\n#### 核心观点\n这是一个测试生成的笔记内容。"
+        )
+        assert data["user_id"] == test_transcript["user_id"]
+        assert data["transcript_id"] == test_transcript["id"]
 
         # Verify the AI service was called
         mock_generate.assert_called_once()
@@ -427,6 +410,43 @@ class TestAIEndpoints:
 
         assert response.status_code == 404
         assert "Transcript not found" in response.json()["detail"]
+
+    @patch("app.ai_services.DeepSeekService.generate_note_from_transcript")
+    async def test_generate_note_overwrite_existing(
+        self, mock_generate, authenticated_client, database, test_user, test_transcript
+    ):
+        """Test note generation overwrites existing note"""
+        # Create an existing note for the transcript
+        note_data = schemas.NoteCreate(
+            title="Existing Note",
+            content="This is the existing note content.",
+            transcript_id=test_transcript["id"],
+        )
+        existing_note = await crud.create_note(database, note_data, test_user["id"])
+
+        # Mock the AI service response - returns tuple (title, content)
+        mock_generate.return_value = (
+            "### 新生成的笔记",
+            "### 新生成的笔记\n\n#### 核心观点\n这是新生成的笔记内容。",
+        )
+
+        response = authenticated_client.post(
+            f"/transcripts/{test_transcript['id']}/generate-note"
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == existing_note["id"]  # Same note ID
+        assert data["title"] == "### 新生成的笔记"  # New title
+        assert (
+            data["content"]
+            == "### 新生成的笔记\n\n#### 核心观点\n这是新生成的笔记内容。"
+        )  # New content
+        assert data["created_at"] is not None  # Should be reset to current time
+        assert data["updated_at"] is None  # Should be reset to None
+
+        # Verify the AI service was called
+        mock_generate.assert_called_once()
 
     @patch("app.ai_services.DeepSeekService.generate_follow_up_questions")
     async def test_generate_questions_success(
@@ -442,10 +462,8 @@ class TestAIEndpoints:
 
         assert response.status_code == 200
         data = response.json()
-        assert "questions" in data
-        assert "message" in data
-        assert data["message"] == "Follow-up questions generated successfully"
-        assert len(data["questions"]) == 2
+        assert data == ["问题1：测试问题1？", "问题2：测试问题2？"]
+        assert len(data) == 2
 
         # Verify the AI service was called
         mock_generate.assert_called_once()
@@ -464,9 +482,10 @@ class TestAIEndpoints:
         self, mock_update, authenticated_client, database, test_note
     ):
         """Test successful note update with answer"""
-        # Mock the AI service response
+        # Mock the AI service response - returns tuple (title, content)
         mock_update.return_value = (
-            "### 更新后的笔记\n\n#### 核心观点\n这是一个根据答案更新后的笔记内容。"
+            "### 更新后的笔记",
+            "### 更新后的笔记\n\n#### 核心观点\n这是一个根据答案更新后的笔记内容。",
         )
 
         answer_data = {"question": "测试问题？", "answer": "测试答案"}
@@ -477,9 +496,12 @@ class TestAIEndpoints:
 
         assert response.status_code == 200
         data = response.json()
-        assert "note" in data
-        assert "message" in data
-        assert data["message"] == "Note updated successfully with answer"
+        assert data["title"] == "### 更新后的笔记"
+        assert (
+            data["content"]
+            == "### 更新后的笔记\n\n#### 核心观点\n这是一个根据答案更新后的笔记内容。"
+        )
+        assert data["updated_at"] is not None  # Should be updated
 
         # Verify the AI service was called
         mock_update.assert_called_once()
@@ -493,14 +515,14 @@ class TestAIEndpoints:
         response = authenticated_client.post(
             f"/notes/{test_note['id']}/update-with-answer", json=answer_data
         )
-        assert response.status_code == 400
+        assert response.status_code == 422  # FastAPI validation error
 
         # Missing answer
         answer_data = {"question": "测试问题？"}
         response = authenticated_client.post(
             f"/notes/{test_note['id']}/update-with-answer", json=answer_data
         )
-        assert response.status_code == 400
+        assert response.status_code == 422  # FastAPI validation error
 
     async def test_update_note_with_answer_nonexistent_note(
         self, authenticated_client, database

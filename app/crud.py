@@ -150,11 +150,21 @@ async def update_note(db: Database, note_id: int, note_update: dict, user_id: in
     if note:
         from datetime import datetime
 
-        query = (
-            models.Note.__table__.update()
-            .where(models.Note.id == note_id, models.Note.user_id == user_id)
-            .values(**note_update, updated_at=datetime.utcnow())
-        )
+        # Check if updated_at is explicitly set in the update data
+        if "updated_at" in note_update:
+            # Use the explicitly provided updated_at value
+            query = (
+                models.Note.__table__.update()
+                .where(models.Note.id == note_id, models.Note.user_id == user_id)
+                .values(**note_update)
+            )
+        else:
+            # Default behavior: set updated_at to current time
+            query = (
+                models.Note.__table__.update()
+                .where(models.Note.id == note_id, models.Note.user_id == user_id)
+                .values(**note_update, updated_at=datetime.utcnow())
+            )
         await db.execute(query)
         return await get_note(db, note_id, user_id)
     return None

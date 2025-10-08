@@ -259,11 +259,6 @@ async def generate_note_from_transcript(
     existing_note = await crud.get_note_by_transcript(
         db, transcript_id, current_user.id
     )
-    if existing_note:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Note already exists for this transcript",
-        )
 
     # Generate note using DeepSeek
     try:
@@ -298,16 +293,30 @@ async def generate_note_from_transcript(
             detail=detail,
         )
 
-    # Create the note
-    note_data = schemas.NoteCreate(
-        title=note_title,
-        content=note_content,
-        transcript_id=transcript_id,
-    )
+    if existing_note:
+        # Overwrite existing note with new AI-generated content
+        # Reset created_at to current time and updated_at to None
+        from datetime import datetime
 
-    note = await crud.create_note(db, note_data, current_user.id)
+        update_data = {
+            "title": note_title,
+            "content": note_content,
+            "created_at": datetime.utcnow(),
+            "updated_at": None,
+        }
+        note = await crud.update_note(
+            db, existing_note["id"], update_data, current_user.id
+        )
+    else:
+        # Create new note
+        note_data = schemas.NoteCreate(
+            title=note_title,
+            content=note_content,
+            transcript_id=transcript_id,
+        )
+        note = await crud.create_note(db, note_data, current_user.id)
 
-    return schemas.Note(note=note)
+    return note
 
 
 @app.post(
@@ -407,19 +416,10 @@ async def update_note_with_answer(
         db, note_id, updated_title, updated_content, current_user.id
     )
 
-    return schemas.Note(note=updated_note)
+    return updated_note
 
 
 # Note endpoints
-@app.post("/notes/", response_model=schemas.Note)
-async def create_note(
-    note: schemas.NoteCreate,
-    current_user: models.User = Depends(get_current_active_user),
-    db=Depends(get_db),
-):
-    return await crud.create_note(db, note, current_user.id)
-
-
 @app.get("/notes/", response_model=list[schemas.Note])
 async def read_notes(
     skip: int = 0,
