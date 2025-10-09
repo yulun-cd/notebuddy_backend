@@ -1,5 +1,5 @@
 from typing import List
-from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine
 from databases import Database
@@ -178,16 +178,30 @@ async def create_transcript(
     return await crud.create_transcript(db, transcript, current_user.id)
 
 
-@app.get("/transcripts/", response_model=list[schemas.Transcript])
+@app.get("/transcripts/")
 async def read_transcripts(
     skip: int = 0,
     limit: int = 100,
+    include_note: bool = False,
     current_user: models.User = Depends(get_current_active_user),
     db=Depends(get_db),
 ):
     transcripts = await crud.get_user_transcripts(
         db, current_user.id, skip=skip, limit=limit
     )
+
+    if include_note:
+        # Get notes for each transcript and create TranscriptWithNoteContent objects
+        result = []
+        for transcript in transcripts:
+            note = await crud.get_note_by_transcript(
+                db, transcript["id"], current_user.id
+            )
+            transcript_data = dict(transcript)
+            transcript_data["note"] = note
+            result.append(transcript_data)
+        return result
+
     return transcripts
 
 

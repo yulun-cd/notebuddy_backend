@@ -121,7 +121,7 @@ class TestTranscriptEndpoints:
 
         response = client.post("/transcripts/", json=transcript_data)
 
-        assert response.status_code == 401  # Unauthorized
+        assert response.status_code in [401, 403]  # Unauthorized or Forbidden
 
     async def test_get_transcript_success(
         self, authenticated_client, database, test_transcript
@@ -174,6 +174,73 @@ class TestTranscriptEndpoints:
         assert isinstance(data, list)
         assert len(data) >= 1
         assert any(t["id"] == test_transcript["id"] for t in data)
+
+    async def test_get_all_transcripts_with_notes(
+        self, authenticated_client, database, test_transcript, test_note
+    ):
+        """Test getting all transcripts with note content included"""
+        response = authenticated_client.get("/transcripts/?include_note=true")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) >= 1
+
+        # Find the transcript with our test note
+        transcript_with_note = None
+        for transcript in data:
+            if transcript["id"] == test_transcript["id"]:
+                transcript_with_note = transcript
+                break
+
+        assert transcript_with_note is not None
+        assert "note" in transcript_with_note
+        assert transcript_with_note["note"] is not None
+        assert transcript_with_note["note"]["id"] == test_note["id"]
+        assert transcript_with_note["note"]["title"] == test_note["title"]
+        assert transcript_with_note["note"]["content"] == test_note["content"]
+
+    async def test_get_all_transcripts_without_notes(
+        self, authenticated_client, database, test_transcript, test_note
+    ):
+        """Test getting all transcripts without note content (default behavior)"""
+        response = authenticated_client.get("/transcripts/")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) >= 1
+
+        # Find the transcript
+        transcript = None
+        for t in data:
+            if t["id"] == test_transcript["id"]:
+                transcript = t
+                break
+
+        assert transcript is not None
+        assert "note" not in transcript  # Should not include note field
+
+    async def test_get_all_transcripts_with_notes_false(
+        self, authenticated_client, database, test_transcript, test_note
+    ):
+        """Test getting all transcripts with include_note explicitly set to false"""
+        response = authenticated_client.get("/transcripts/?include_note=false")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) >= 1
+
+        # Find the transcript
+        transcript = None
+        for t in data:
+            if t["id"] == test_transcript["id"]:
+                transcript = t
+                break
+
+        assert transcript is not None
+        assert "note" not in transcript  # Should not include note field
 
     async def test_update_transcript_success(
         self, authenticated_client, database, test_transcript

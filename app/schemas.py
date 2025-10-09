@@ -103,6 +103,17 @@ class Note(NoteBase):
         from_attributes = True
 
 
+class TranscriptWithNoteContent(TranscriptBase):
+    id: int = Field(read_only=True)
+    user_id: int = Field(read_only=True)
+    created_at: datetime = Field(read_only=True)
+    updated_at: Optional[datetime] = Field(read_only=True, default=None)
+    note: Optional[Note] = Field(read_only=True, default=None)
+
+    class Config:
+        from_attributes = True
+
+
 # AI-related schemas
 class NoteGenerationRequest(BaseModel):
     transcript_id: int
