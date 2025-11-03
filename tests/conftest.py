@@ -62,7 +62,13 @@ async def database(test_database_url, database_engine):
 @pytest.fixture
 async def test_user(database):
     """Create a test user"""
-    user_data = schemas.UserCreate(email="test@example.com", password="testpassword123")
+    user_data = schemas.UserCreate(
+        email="test@example.com",
+        password="testpassword123",
+        first_name="Test",
+        last_name="User",
+        language="Chinese",
+    )
     user = await crud.create_user(database, user_data)
     return user
 

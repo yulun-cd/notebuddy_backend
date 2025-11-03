@@ -274,11 +274,11 @@ async def generate_note_from_transcript(
         db, transcript_id, current_user.id
     )
 
-    # Generate note using DeepSeek
+    # Generate note using DeepSeek with user's language preference
     try:
         note_title, note_content = (
             await ai_services.deepseek_service.generate_note_from_transcript(
-                transcript.content
+                transcript.content, language=current_user.language
             )
         )
     except Exception as e:
@@ -347,10 +347,10 @@ async def generate_follow_up_questions(
     if note is None:
         raise HTTPException(status_code=404, detail="Note not found")
 
-    # Generate follow-up questions using DeepSeek
+    # Generate follow-up questions using DeepSeek with user's language preference
     try:
         questions = await ai_services.deepseek_service.generate_follow_up_questions(
-            note.content
+            note.content, language=current_user.language
         )
     except Exception as e:
         error_message = str(e)
@@ -396,11 +396,14 @@ async def update_note_with_answer(
             detail="Both question and answer are required",
         )
 
-    # Update note with answer using DeepSeek
+    # Update note with answer using DeepSeek with user's language preference
     try:
         updated_title, updated_content = (
             await ai_services.deepseek_service.update_note_with_answer(
-                note.content, answer_data.question, answer_data.answer
+                note.content,
+                answer_data.question,
+                answer_data.answer,
+                language=current_user.language,
             )
         )
     except Exception as e:
@@ -431,6 +434,30 @@ async def update_note_with_answer(
     )
 
     return updated_note
+
+
+# User profile endpoints
+@app.get("/users/profile", response_model=schemas.User)
+async def get_user_profile(
+    current_user: models.User = Depends(get_current_active_user),
+    db=Depends(get_db),
+):
+    """Get current user's profile including language preference"""
+    return current_user
+
+
+@app.put("/users/profile", response_model=schemas.User)
+async def update_user_profile(
+    user_update: schemas.UserUpdate,
+    current_user: models.User = Depends(get_current_active_user),
+    db=Depends(get_db),
+):
+    """Update user profile including language preference"""
+    update_data = user_update.model_dump(exclude_unset=True)
+    updated_user = await crud.update_user(db, current_user.id, update_data)
+    if updated_user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return updated_user
 
 
 # Note endpoints

@@ -6,11 +6,21 @@ from datetime import datetime
 # User schemas
 class UserBase(BaseModel):
     email: EmailStr
+    language: str = Field(default="Chinese")
+    first_name: str
+    last_name: str
+    nick_name: Optional[str] = None
+    gender: Optional[str] = None
 
 
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
+    language: str = Field(default="Chinese")
+    first_name: str
+    last_name: str
+    nick_name: Optional[str] = None
+    gender: Optional[str] = None
 
 
 class User(UserBase):
@@ -19,6 +29,14 @@ class User(UserBase):
 
     class Config:
         from_attributes = True
+
+
+class UserUpdate(BaseModel):
+    language: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    nick_name: Optional[str] = None
+    gender: Optional[str] = None
 
 
 class UserLogin(BaseModel):

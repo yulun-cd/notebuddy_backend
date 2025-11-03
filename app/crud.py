@@ -12,6 +12,11 @@ async def create_user(db: Database, user: schemas.UserCreate):
     query = models.User.__table__.insert().values(
         email=user.email,
         hashed_password=hashed_password,
+        language=user.language,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        nick_name=user.nick_name,
+        gender=user.gender,
         created_at=datetime.utcnow(),
     )
     user_id = await db.execute(query)
@@ -199,3 +204,16 @@ async def delete_note(db: Database, note_id: int, user_id: int):
         )
         await db.execute(query)
     return note
+
+
+async def update_user(db: Database, user_id: int, user_update: dict):
+    user = await get_user(db, user_id)
+    if user:
+        query = (
+            models.User.__table__.update()
+            .where(models.User.id == user_id)
+            .values(**user_update)
+        )
+        await db.execute(query)
+        return await get_user(db, user_id)
+    return None
