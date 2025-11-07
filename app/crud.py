@@ -1,5 +1,4 @@
 from databases import Database
-from typing import Optional
 from . import models, schemas
 from .auth import get_password_hash
 

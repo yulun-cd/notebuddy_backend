@@ -7,7 +7,6 @@ import asyncio
 from databases import Database
 from sqlalchemy import create_engine
 import os
-from datetime import datetime
 
 # Set test environment and mock API key before importing app modules
 os.environ["ENVIRONMENT"] = "test"

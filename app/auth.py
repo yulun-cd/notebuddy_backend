@@ -9,7 +9,7 @@ import os
 from dotenv import load_dotenv
 
 from .schemas import TokenData
-from .models import User, RefreshToken
+from .models import User
 
 load_dotenv()
 
