@@ -1,32 +1,38 @@
 from typing import List
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine
-from databases import Database
+from sqlalchemy.ext.asyncio import AsyncSession
 import os
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
 from . import models, schemas, crud, auth, ai_services
 from .auth import get_current_user, security
+from .database import get_db, engine
 
 
 load_dotenv()
 
 # Database setup - support environment-specific databases
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
-if ENVIRONMENT == "test":
-    DATABASE_URL = os.getenv(
-        "TEST_DATABASE_URL", "sqlite+aiosqlite:///./test_notebuddy.db"
-    )
-else:
-    DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./notebuddy.db")
 
-database = Database(DATABASE_URL)
+
+# Create tables on startup
+async def create_tables():
+    async with engine.begin() as conn:
+        await conn.run_sync(models.Base.metadata.create_all)
+
 
 # SQLAlchemy setup for table creation
-engine = create_engine(DATABASE_URL.replace("+aiosqlite", ""))
-models.Base.metadata.create_all(bind=engine)
+try:
+    import asyncio
+
+    asyncio.run(create_tables())
+except Exception as e:
+    print(
+        f"Note: Could not create tables automatically. This is expected if PostgreSQL is not running."
+    )
+    print(f"Error details: {e}")
 
 # FastAPI app
 app = FastAPI(
@@ -45,23 +51,16 @@ app.add_middleware(
 )
 
 
-# Database dependency
-async def get_db():
-    await database.connect()
-    try:
-        yield database
-    finally:
-        await database.disconnect()
-
-
 # Create a dependency that includes database session
-async def get_current_active_user(credentials=Depends(security), db=Depends(get_db)):
+async def get_current_active_user(
+    credentials=Depends(security), db: AsyncSession = Depends(get_db)
+):
     return await get_current_user(credentials, db)
 
 
 # Authentication endpoints
 @app.post("/auth/register", response_model=schemas.User)
-async def register(user: schemas.UserCreate, db=Depends(get_db)):
+async def register(user: schemas.UserCreate, db: AsyncSession = Depends(get_db)):
     # Check if email already exists
     existing_user_by_email = await crud.get_user_by_email(db, user.email)
     if existing_user_by_email:
@@ -74,7 +73,7 @@ async def register(user: schemas.UserCreate, db=Depends(get_db)):
 
 
 @app.post("/auth/login", response_model=schemas.Token)
-async def login(user_login: schemas.UserLogin, db=Depends(get_db)):
+async def login(user_login: schemas.UserLogin, db: AsyncSession = Depends(get_db)):
     user = await auth.authenticate_user(db, user_login.email, user_login.password)
     if not user:
         raise HTTPException(
@@ -83,7 +82,7 @@ async def login(user_login: schemas.UserLogin, db=Depends(get_db)):
         )
 
     # Create access token
-    access_token = auth.create_access_token(data={"sub": user["email"]})
+    access_token = auth.create_access_token(data={"sub": user.email})
 
     # Create refresh token
     refresh_token = auth.create_refresh_token()
@@ -93,13 +92,15 @@ async def login(user_login: schemas.UserLogin, db=Depends(get_db)):
     # Store refresh token in database
     from .models import RefreshToken
 
-    query = RefreshToken.__table__.insert().values(
-        user_id=user["id"],
+    db_refresh_token = RefreshToken(
+        user_id=user.id,
         token_hash=refresh_token_hash,
         expires_at=expires_at,
         created_at=datetime.utcnow(),
     )
-    await db.execute(query)
+    db.add(db_refresh_token)
+    await db.commit()
+    await db.refresh(db_refresh_token)
 
     return {
         "access_token": access_token,
@@ -110,22 +111,21 @@ async def login(user_login: schemas.UserLogin, db=Depends(get_db)):
 
 @app.post("/auth/refresh", response_model=schemas.Token)
 async def refresh_token(
-    refresh_request: schemas.RefreshTokenRequest, db=Depends(get_db)
+    refresh_request: schemas.RefreshTokenRequest, db: AsyncSession = Depends(get_db)
 ):
     from .models import RefreshToken
+    from sqlalchemy import select
 
     # Find the refresh token in database
-    query = RefreshToken.__table__.select().where(
-        RefreshToken.expires_at > datetime.utcnow()
+    result = await db.execute(
+        select(RefreshToken).where(RefreshToken.expires_at > datetime.utcnow())
     )
-    tokens = await db.fetch_all(query)
+    tokens = result.scalars().all()
 
     # Find matching token
     matching_token = None
     for token in tokens:
-        if auth.verify_refresh_token(
-            refresh_request.refresh_token, token["token_hash"]
-        ):
+        if auth.verify_refresh_token(refresh_request.refresh_token, token.token_hash):
             matching_token = token
             break
 
@@ -135,14 +135,14 @@ async def refresh_token(
         )
 
     # Get user
-    user = await crud.get_user(db, matching_token["user_id"])
+    user = await crud.get_user(db, matching_token.user_id)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
         )
 
     # Create new access token
-    access_token = auth.create_access_token(data={"sub": user["email"]})
+    access_token = auth.create_access_token(data={"sub": user.email})
 
     # Create new refresh token (token rotation)
     new_refresh_token = auth.create_refresh_token()
@@ -150,16 +150,12 @@ async def refresh_token(
     expires_at = datetime.utcnow() + timedelta(days=auth.REFRESH_TOKEN_EXPIRE_DAYS)
 
     # Update refresh token in database
-    update_query = (
-        RefreshToken.__table__.update()
-        .where(RefreshToken.id == matching_token["id"])
-        .values(
-            token_hash=new_refresh_token_hash,
-            expires_at=expires_at,
-            created_at=datetime.utcnow(),
-        )
-    )
-    await db.execute(update_query)
+    matching_token.token_hash = new_refresh_token_hash
+    matching_token.expires_at = expires_at
+    matching_token.created_at = datetime.utcnow()
+
+    await db.commit()
+    await db.refresh(matching_token)
 
     return {
         "access_token": access_token,
@@ -173,7 +169,7 @@ async def refresh_token(
 async def create_transcript(
     transcript: schemas.TranscriptCreate,
     current_user: models.User = Depends(get_current_active_user),
-    db=Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     return await crud.create_transcript(db, transcript, current_user.id)
 
@@ -184,7 +180,7 @@ async def read_transcripts(
     limit: int = 100,
     include_note: bool = False,
     current_user: models.User = Depends(get_current_active_user),
-    db=Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     transcripts = await crud.get_user_transcripts(
         db, current_user.id, skip=skip, limit=limit
@@ -194,10 +190,15 @@ async def read_transcripts(
         # Get notes for each transcript and create TranscriptWithNoteContent objects
         result = []
         for transcript in transcripts:
-            note = await crud.get_note_by_transcript(
-                db, transcript["id"], current_user.id
-            )
-            transcript_data = dict(transcript)
+            note = await crud.get_note_by_transcript(db, transcript.id, current_user.id)
+            transcript_data = {
+                "id": transcript.id,
+                "title": transcript.title,
+                "content": transcript.content,
+                "user_id": transcript.user_id,
+                "created_at": transcript.created_at,
+                "updated_at": transcript.updated_at,
+            }
             transcript_data["note"] = note
             result.append(transcript_data)
         return result
@@ -209,7 +210,7 @@ async def read_transcripts(
 async def read_transcript(
     transcript_id: int,
     current_user: models.User = Depends(get_current_active_user),
-    db=Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     transcript = await crud.get_transcript(db, transcript_id, current_user.id)
     if transcript is None:
@@ -219,8 +220,15 @@ async def read_transcript(
     note = await crud.get_note_by_transcript(db, transcript_id, current_user.id)
 
     # Create response with note_id
-    response_data = dict(transcript)
-    response_data["note_id"] = note["id"] if note else None
+    response_data = {
+        "id": transcript.id,
+        "title": transcript.title,
+        "content": transcript.content,
+        "user_id": transcript.user_id,
+        "created_at": transcript.created_at,
+        "updated_at": transcript.updated_at,
+        "note_id": note.id if note else None,
+    }
 
     return response_data
 
@@ -230,7 +238,7 @@ async def update_transcript(
     transcript_id: int,
     transcript_update: schemas.TranscriptUpdate,
     current_user: models.User = Depends(get_current_active_user),
-    db=Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     # Update the transcript
     update_data = transcript_update.model_dump(exclude_unset=True)
@@ -246,7 +254,7 @@ async def update_transcript(
 async def delete_transcript(
     transcript_id: int,
     current_user: models.User = Depends(get_current_active_user),
-    db=Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     transcript = await crud.delete_transcript(db, transcript_id, current_user.id)
     if transcript is None:
@@ -262,7 +270,7 @@ async def delete_transcript(
 async def generate_note_from_transcript(
     transcript_id: int,
     current_user: models.User = Depends(get_current_active_user),
-    db=Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     # Get the transcript
     transcript = await crud.get_transcript(db, transcript_id, current_user.id)
@@ -319,7 +327,7 @@ async def generate_note_from_transcript(
             "updated_at": None,
         }
         note = await crud.update_note(
-            db, existing_note["id"], update_data, current_user.id
+            db, existing_note.id, update_data, current_user.id
         )
     else:
         # Create new note
@@ -340,7 +348,7 @@ async def generate_note_from_transcript(
 async def generate_follow_up_questions(
     note_id: int,
     current_user: models.User = Depends(get_current_active_user),
-    db=Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     # Get the note
     note = await crud.get_note(db, note_id, current_user.id)
@@ -382,7 +390,7 @@ async def update_note_with_answer(
     note_id: int,
     answer_data: schemas.AnswerSubmission,
     current_user: models.User = Depends(get_current_active_user),
-    db=Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     # Get the note
     note = await crud.get_note(db, note_id, current_user.id)
@@ -440,7 +448,7 @@ async def update_note_with_answer(
 @app.get("/users/profile", response_model=schemas.User)
 async def get_user_profile(
     current_user: models.User = Depends(get_current_active_user),
-    db=Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Get current user's profile including language preference"""
     return current_user
@@ -450,7 +458,7 @@ async def get_user_profile(
 async def update_user_profile(
     user_update: schemas.UserUpdate,
     current_user: models.User = Depends(get_current_active_user),
-    db=Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update user profile including language preference"""
     update_data = user_update.model_dump(exclude_unset=True)
@@ -466,7 +474,7 @@ async def read_notes(
     skip: int = 0,
     limit: int = 100,
     current_user: models.User = Depends(get_current_active_user),
-    db=Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     notes = await crud.get_user_notes(db, current_user.id, skip=skip, limit=limit)
     return notes
@@ -476,7 +484,7 @@ async def read_notes(
 async def read_note(
     note_id: int,
     current_user: models.User = Depends(get_current_active_user),
-    db=Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     note = await crud.get_note(db, note_id, current_user.id)
     if note is None:
@@ -489,7 +497,7 @@ async def update_note(
     note_id: int,
     note_update: schemas.NoteUpdate,
     current_user: models.User = Depends(get_current_active_user),
-    db=Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     # Update the note
     update_data = note_update.model_dump(exclude_unset=True)
@@ -503,7 +511,7 @@ async def update_note(
 async def delete_note(
     note_id: int,
     current_user: models.User = Depends(get_current_active_user),
-    db=Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     note = await crud.delete_note(db, note_id, current_user.id)
     if note is None:

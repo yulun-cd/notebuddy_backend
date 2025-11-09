@@ -1,14 +1,16 @@
-from databases import Database
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update, delete
+from sqlalchemy.orm import selectinload
+from datetime import datetime
 from . import models, schemas
 from .auth import get_password_hash
 
 
 # User CRUD operations
-async def create_user(db: Database, user: schemas.UserCreate):
+async def create_user(db: AsyncSession, user: schemas.UserCreate):
     hashed_password = get_password_hash(user.password)
-    from datetime import datetime
 
-    query = models.User.__table__.insert().values(
+    db_user = models.User(
         email=user.email,
         hashed_password=hashed_password,
         language=user.language,
@@ -18,201 +20,190 @@ async def create_user(db: Database, user: schemas.UserCreate):
         gender=user.gender,
         created_at=datetime.utcnow(),
     )
-    user_id = await db.execute(query)
-    return await get_user(db, user_id)
+
+    db.add(db_user)
+    await db.commit()
+    await db.refresh(db_user)
+    return db_user
 
 
-async def get_user_by_email(db: Database, email: str):
-    query = models.User.__table__.select().where(models.User.email == email)
-    return await db.fetch_one(query)
+async def get_user_by_email(db: AsyncSession, email: str):
+    result = await db.execute(select(models.User).where(models.User.email == email))
+    return result.scalar_one_or_none()
 
 
-async def get_user(db: Database, user_id: int):
-    query = models.User.__table__.select().where(models.User.id == user_id)
-    return await db.fetch_one(query)
+async def get_user(db: AsyncSession, user_id: int):
+    result = await db.execute(select(models.User).where(models.User.id == user_id))
+    return result.scalar_one_or_none()
 
 
 # Transcript CRUD operations
 async def create_transcript(
-    db: Database, transcript: schemas.TranscriptCreate, user_id: int
+    db: AsyncSession, transcript: schemas.TranscriptCreate, user_id: int
 ):
-    from datetime import datetime
-
-    query = models.Transcript.__table__.insert().values(
+    db_transcript = models.Transcript(
         title=transcript.title,
         content=transcript.content,
         user_id=user_id,
         created_at=datetime.utcnow(),
     )
-    transcript_id = await db.execute(query)
-    return await get_transcript(db, transcript_id, user_id)
+
+    db.add(db_transcript)
+    await db.commit()
+    await db.refresh(db_transcript)
+    return db_transcript
 
 
-async def get_transcript(db: Database, transcript_id: int, user_id: int):
-    query = models.Transcript.__table__.select().where(
-        models.Transcript.id == transcript_id, models.Transcript.user_id == user_id
+async def get_transcript(db: AsyncSession, transcript_id: int, user_id: int):
+    result = await db.execute(
+        select(models.Transcript).where(
+            models.Transcript.id == transcript_id, models.Transcript.user_id == user_id
+        )
     )
-    return await db.fetch_one(query)
+    return result.scalar_one_or_none()
 
 
 async def get_user_transcripts(
-    db: Database, user_id: int, skip: int = 0, limit: int = 100
+    db: AsyncSession, user_id: int, skip: int = 0, limit: int = 100
 ):
-    # Order by the greater value of created_at and updated_at
-    # Use COALESCE to handle NULL updated_at values (treat them as created_at)
-    query = (
-        models.Transcript.__table__.select()
+    result = await db.execute(
+        select(models.Transcript)
         .where(models.Transcript.user_id == user_id)
         .order_by(
-            models.Transcript.__table__.c.updated_at.desc().nulls_last(),
-            models.Transcript.__table__.c.created_at.desc(),
+            models.Transcript.updated_at.desc().nulls_last(),
+            models.Transcript.created_at.desc(),
         )
         .offset(skip)
         .limit(limit)
     )
-    return await db.fetch_all(query)
+    return result.scalars().all()
 
 
 async def update_transcript(
-    db: Database, transcript_id: int, transcript_update: dict, user_id: int
+    db: AsyncSession, transcript_id: int, transcript_update: dict, user_id: int
 ):
     transcript = await get_transcript(db, transcript_id, user_id)
     if transcript:
-        from datetime import datetime
+        for field, value in transcript_update.items():
+            setattr(transcript, field, value)
+        transcript.updated_at = datetime.utcnow()
 
-        query = (
-            models.Transcript.__table__.update()
-            .where(
-                models.Transcript.id == transcript_id,
-                models.Transcript.user_id == user_id,
-            )
-            .values(**transcript_update, updated_at=datetime.utcnow())
-        )
-        await db.execute(query)
-        return await get_transcript(db, transcript_id, user_id)
+        await db.commit()
+        await db.refresh(transcript)
+        return transcript
     return None
 
 
-async def delete_transcript(db: Database, transcript_id: int, user_id: int):
+async def delete_transcript(db: AsyncSession, transcript_id: int, user_id: int):
     transcript = await get_transcript(db, transcript_id, user_id)
     if transcript:
         # First, delete the related note if it exists
         related_note = await get_note_by_transcript(db, transcript_id, user_id)
         if related_note:
-            await delete_note(db, related_note["id"], user_id)
+            await delete_note(db, related_note.id, user_id)
 
         # Then delete the transcript
-        query = models.Transcript.__table__.delete().where(
-            models.Transcript.id == transcript_id, models.Transcript.user_id == user_id
-        )
-        await db.execute(query)
+        await db.delete(transcript)
+        await db.commit()
     return transcript
 
 
 # Note CRUD operations
-async def create_note(db: Database, note: schemas.NoteCreate, user_id: int):
-    from datetime import datetime
-
-    query = models.Note.__table__.insert().values(
+async def create_note(db: AsyncSession, note: schemas.NoteCreate, user_id: int):
+    db_note = models.Note(
         title=note.title,
         content=note.content,
         transcript_id=note.transcript_id,
         user_id=user_id,
         created_at=datetime.utcnow(),
     )
-    note_id = await db.execute(query)
-    return await get_note(db, note_id, user_id)
+
+    db.add(db_note)
+    await db.commit()
+    await db.refresh(db_note)
+    return db_note
 
 
-async def get_note(db: Database, note_id: int, user_id: int):
-    query = models.Note.__table__.select().where(
-        models.Note.id == note_id, models.Note.user_id == user_id
+async def get_note(db: AsyncSession, note_id: int, user_id: int):
+    result = await db.execute(
+        select(models.Note).where(
+            models.Note.id == note_id, models.Note.user_id == user_id
+        )
     )
-    note = await db.fetch_one(query)
-    return note
+    return result.scalar_one_or_none()
 
 
-async def get_user_notes(db: Database, user_id: int, skip: int = 0, limit: int = 100):
-    query = (
-        models.Note.__table__.select()
+async def get_user_notes(
+    db: AsyncSession, user_id: int, skip: int = 0, limit: int = 100
+):
+    result = await db.execute(
+        select(models.Note)
         .where(models.Note.user_id == user_id)
         .offset(skip)
         .limit(limit)
     )
-    return await db.fetch_all(query)
+    return result.scalars().all()
 
 
-async def get_note_by_transcript(db: Database, transcript_id: int, user_id: int):
-    query = models.Note.__table__.select().where(
-        models.Note.transcript_id == transcript_id, models.Note.user_id == user_id
+async def get_note_by_transcript(db: AsyncSession, transcript_id: int, user_id: int):
+    result = await db.execute(
+        select(models.Note).where(
+            models.Note.transcript_id == transcript_id, models.Note.user_id == user_id
+        )
     )
-    return await db.fetch_one(query)
+    return result.scalar_one_or_none()
 
 
-async def update_note(db: Database, note_id: int, note_update: dict, user_id: int):
+async def update_note(db: AsyncSession, note_id: int, note_update: dict, user_id: int):
     note = await get_note(db, note_id, user_id)
     if note:
-        from datetime import datetime
+        for field, value in note_update.items():
+            setattr(note, field, value)
 
-        # Check if updated_at is explicitly set in the update data
-        if "updated_at" in note_update:
-            # Use the explicitly provided updated_at value
-            query = (
-                models.Note.__table__.update()
-                .where(models.Note.id == note_id, models.Note.user_id == user_id)
-                .values(**note_update)
-            )
-        else:
-            # Default behavior: set updated_at to current time
-            query = (
-                models.Note.__table__.update()
-                .where(models.Note.id == note_id, models.Note.user_id == user_id)
-                .values(**note_update, updated_at=datetime.utcnow())
-            )
-        await db.execute(query)
-        return await get_note(db, note_id, user_id)
+        # Only set updated_at if not explicitly provided
+        if "updated_at" not in note_update:
+            note.updated_at = datetime.utcnow()
+
+        await db.commit()
+        await db.refresh(note)
+        return note
     return None
 
 
 async def update_note_with_answers(
-    db: Database, note_id: int, updated_title: str, updated_content: str, user_id: int
+    db: AsyncSession,
+    note_id: int,
+    updated_title: str,
+    updated_content: str,
+    user_id: int,
 ):
     note = await get_note(db, note_id, user_id)
     if note:
-        from datetime import datetime, timezone
+        note.title = updated_title
+        note.content = updated_content
+        note.updated_at = datetime.utcnow()
 
-        query = (
-            models.Note.__table__.update()
-            .where(models.Note.id == note_id, models.Note.user_id == user_id)
-            .values(
-                title=updated_title,
-                content=updated_content,
-                updated_at=datetime.now(timezone.utc),
-            )
-        )
-        await db.execute(query)
-        return await get_note(db, note_id, user_id)
+        await db.commit()
+        await db.refresh(note)
+        return note
     return None
 
 
-async def delete_note(db: Database, note_id: int, user_id: int):
+async def delete_note(db: AsyncSession, note_id: int, user_id: int):
     note = await get_note(db, note_id, user_id)
     if note:
-        query = models.Note.__table__.delete().where(
-            models.Note.id == note_id, models.Note.user_id == user_id
-        )
-        await db.execute(query)
+        await db.delete(note)
+        await db.commit()
     return note
 
 
-async def update_user(db: Database, user_id: int, user_update: dict):
+async def update_user(db: AsyncSession, user_id: int, user_update: dict):
     user = await get_user(db, user_id)
     if user:
-        query = (
-            models.User.__table__.update()
-            .where(models.User.id == user_id)
-            .values(**user_update)
-        )
-        await db.execute(query)
-        return await get_user(db, user_id)
+        for field, value in user_update.items():
+            setattr(user, field, value)
+
+        await db.commit()
+        await db.refresh(user)
+        return user
     return None

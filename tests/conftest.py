@@ -4,8 +4,6 @@ Test configuration and fixtures for NoteBuddy backend tests
 
 import pytest
 import asyncio
-from databases import Database
-from sqlalchemy import create_engine
 import os
 
 # Set test environment and mock API key before importing app modules
@@ -13,7 +11,7 @@ os.environ["ENVIRONMENT"] = "test"
 os.environ["DEEPSEEK_API_KEY"] = "test-api-key-12345"
 os.environ["SECRET_KEY"] = "test-secret-key"
 
-from app import models, schemas, crud, auth, ai_services
+from app import schemas, crud, ai_services
 
 
 @pytest.fixture(scope="session")
@@ -22,40 +20,6 @@ def event_loop():
     loop = asyncio.get_event_loop_policy().new_event_loop()
     yield loop
     loop.close()
-
-
-@pytest.fixture(scope="session")
-def test_database_url():
-    """Get test database URL"""
-    return "sqlite+aiosqlite:///./test_notebuddy.db"
-
-
-@pytest.fixture(scope="session")
-def database_engine(test_database_url):
-    """Create database engine for table creation"""
-    engine = create_engine(test_database_url.replace("+aiosqlite", ""))
-    models.Base.metadata.create_all(bind=engine)
-    yield engine
-    models.Base.metadata.drop_all(bind=engine)
-    # Clean up the database file
-    import os
-
-    db_file = "./test_notebuddy.db"
-    if os.path.exists(db_file):
-        os.remove(db_file)
-
-
-@pytest.fixture
-async def database(test_database_url, database_engine):
-    """Create database connection for tests"""
-    database = Database(test_database_url)
-    await database.connect()
-    yield database
-    # Clean up all data between tests
-    await database.execute("DELETE FROM notes")
-    await database.execute("DELETE FROM transcripts")
-    await database.execute("DELETE FROM users")
-    await database.disconnect()
 
 
 @pytest.fixture

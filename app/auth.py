@@ -74,7 +74,7 @@ async def authenticate_user(db, email: str, password: str):
     user = await crud.get_user_by_email(db, email)
     if not user:
         return False
-    if not verify_password(password, user["hashed_password"]):
+    if not verify_password(password, user.hashed_password):
         return False
     return user
 
